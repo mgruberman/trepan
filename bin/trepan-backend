@@ -1,0 +1,74 @@
+#!/usr/bin/env ruby
+
+require 'expect'
+
+# TODO: use Getopt::Long
+# TODO: use Pod::Usage
+#
+pid = ARGV[0]
+cmd = "bash -c 'gdb --quiet --nw --nx --pid #{pid} 2>/dev/null'"
+
+# Attach to the other Ruby process with GDB and script the interaction
+# with Expect
+#
+IO.popen(cmd, 'r+') do
+  |gdb|
+
+  # Wait for start-up
+  #
+  gdb.expect( /\(gdb\)/ ) do
+
+    # Send for the backtrace
+    #
+    gdb.print( "backtrace\n" )
+  end
+
+  # Wait for the backtrace
+  #
+  gdb.expect( /\(gdb\)/ ) do
+    | bufa |
+
+    # Parse the backtrace to get the list of C pointers to the arguments.
+    # 
+    buf = bufa.to_s
+    argv_pointers =
+      buf.scan( /rb_call .+?argc=(\d+).+?argv=(0x[[:xdigit:]]+)/ )
+
+    # Dereference each pointer to get the (VALUE) we can hand back to Ruby
+    #
+    argv_pointers.each_index do
+      | argv_index |
+      argc, argv = argv_pointers[ argv_index ]
+
+      # Capture all arguments
+      #
+      1.upto( argc.to_i ) do
+        | nth |
+        nth_index = nth - 1
+
+        # Capture an argument
+        #
+        gdb.print( "print *( #{nth_index} + (VALUE*)#{argv} )\n" )
+        gdb.expect( /= [[:xdigit:]]+\n/ ) do
+          | p |
+          value = /= (\d+)/.match( p[0] )
+          puts "VALUE[#{argv_index}][#{nth_index}]=#{value[1]}"
+        end
+
+        # Ensure we got a prompt back
+        #
+        gdb.expect( /\(gdb\)/ )
+      end
+    end
+
+    # Shut down GDB and let the other process resume
+    #
+    gdb.print( "detach\nquit\n" )
+  end
+end
+
+# Local variables:
+# mode: ruby
+# End:
+#
+# vim: syntax=ruby
